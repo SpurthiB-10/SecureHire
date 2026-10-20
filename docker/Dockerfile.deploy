@@ -1,0 +1,78 @@
+# SecureHire AI — Combined single-service deployment image
+# =============================================================
+# Produces ONE container that serves the whole product on ONE URL:
+#   https://your-app.onrender.com/           -> React frontend
+#   https://your-app.onrender.com/api/v1/... -> FastAPI backend
+#   https://your-app.onrender.com/docs       -> Swagger docs
+#
+# The synthetic dataset, ETL pipeline, and ML model training all run
+# DURING the image build — so the deployed container boots with a fully
+# trained model already baked in (no external volume, no separate
+# training step needed at deploy time). Only PostgreSQL needs to be
+# provided externally at runtime via DATABASE_URL (see docs/DEPLOY.md).
+#
+# Build from the REPO ROOT:
+#   docker build -f docker/Dockerfile.deploy -t securehire-ai .
+# Run:
+#   docker run -p 8000:8000 -e DATABASE_URL=... -e SECRET_KEY=... securehire-ai
+
+# ---- Stage 1: build the React frontend -------------------------------
+FROM node:20-alpine AS frontend-build
+WORKDIR /app/frontend
+COPY frontend/package.json frontend/package-lock.json* ./
+RUN npm install
+COPY frontend/ .
+RUN npm run build
+# -> /app/frontend/dist
+
+# ---- Stage 2: generate data + train the ML model ----------------------
+FROM python:3.11-slim AS ml-build
+WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends gcc && rm -rf /var/lib/apt/lists/*
+
+COPY pipelines/requirements.txt pipelines/requirements.txt
+RUN pip install --no-cache-dir -r pipelines/requirements.txt
+COPY pipelines/ pipelines/
+RUN cd pipelines && python3 generate_dataset.py --n 5000 && python3 run_pipeline.py
+
+COPY ml/requirements.txt ml/requirements.txt
+RUN pip install --no-cache-dir -r ml/requirements.txt
+COPY ml/ ml/
+RUN cd ml && python3 train.py
+# -> /app/models/<version>/*.joblib  and  /app/data/raw/job_postings.csv
+
+# ---- Stage 3: final runtime image (backend + baked-in frontend + model)
+FROM python:3.11-slim
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc libpq-dev curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY backend/requirements.txt backend/requirements.txt
+RUN pip install --no-cache-dir -r backend/requirements.txt
+
+COPY backend/ backend/
+
+# Baked-in trained model + demo seed data (no external volume needed —
+# this is what makes the container fully self-contained and portable
+# to any single-service host).
+COPY --from=ml-build /app/models /models
+COPY --from=ml-build /app/data /data
+
+# Baked-in built frontend, served directly by FastAPI (see backend/app/main.py)
+COPY --from=frontend-build /app/frontend/dist backend/app/static
+
+ENV MODELS_ROOT=/models
+ENV DATA_ROOT=/data
+ENV PYTHONUNBUFFERED=1
+
+WORKDIR /app/backend
+
+EXPOSE 8000
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s \
+    CMD curl -f http://localhost:${PORT:-8000}/health || exit 1
+
+# Render (and most PaaS hosts) inject $PORT at runtime; default to 8000 for
+# plain `docker run` / other hosts that don't set it.
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]

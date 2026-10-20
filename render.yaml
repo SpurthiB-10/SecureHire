@@ -1,0 +1,33 @@
+# Render Blueprint — deploys SecureHire AI as ONE web service on ONE URL.
+#
+# This defines the web service only. PostgreSQL is provisioned separately
+# on Neon (free, permanent tier) rather than Render's own Postgres add-on,
+# because Render's free Postgres expires after 30 days — see docs/DEPLOY.md
+# for the exact step-by-step signup + connection flow.
+#
+# Usage: push this repo to GitHub, then in the Render dashboard choose
+# "New > Blueprint" and point it at the repo. Render reads this file
+# automatically.
+
+services:
+  - type: web
+    name: securehire-ai
+    runtime: docker
+    plan: free
+    region: oregon
+    dockerfilePath: ./docker/Dockerfile.deploy
+    dockerContext: .
+    healthCheckPath: /health
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true          # Render auto-generates a random secret
+      - key: DATABASE_URL
+        sync: false                  # paste your Neon connection string in the dashboard
+      - key: MODEL_DIR
+        value: /models
+      - key: ENV
+        value: production
+      # No REDIS_URL is set on purpose — the app runs correctly without
+      # Redis (prediction caching becomes a no-op; see backend/app/services/cache.py's
+      # fail-open design), which keeps this a true single-service, single-URL
+      # deployment with nothing else to provision.

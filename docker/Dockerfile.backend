@@ -1,0 +1,27 @@
+# SecureHire AI — Backend (FastAPI) container
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# System deps needed by psycopg2 and scientific libs
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc libpq-dev curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY backend/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# spaCy English model (used by the NLP entity-extraction pass)
+RUN python -m spacy download en_core_web_sm || true
+
+COPY backend/ .
+# ml_core inside backend/app is self-contained; the models/ artifact store
+# is mounted as a volume (see docker-compose.yml) rather than baked into
+# the image, so retraining doesn't require a rebuild.
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -283,7 +283,7 @@ Full interactive docs are auto-generated at `/docs` (Swagger UI). A few examples
 # Register
 curl -X POST http://localhost:8000/api/v1/auth/register \
   -H "Content-Type: application/json" \
-  -d '{"email":"you@example.com","password":"yourpassword123","full_name":"Jane Doe"}'
+  -d '{"email":"you@example.com","password":"yourpassword123","full_name":"name"}'
 
 # Analyze a job posting
 curl -X POST http://localhost:8000/api/v1/jobs/analyze \
